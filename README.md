@@ -14,7 +14,7 @@ Lv2 Intensive Coursework의 일환으로 MSA로 시스템을 구성하기 위한
 6. 도서 재고가 증가한다.
 7. 고객이 예약을 취소한다.
 8. 고객이 MyPage를 통해 예약 현황을 확인한다.
-9. 예약현황내 신규등록 서적ID가 
+9. 고객의 MyPage에서 신규등록 서적ID가 조회된다
 
 
 ### 비기능적 요구사항
@@ -100,14 +100,19 @@ Lv2 Intensive Coursework의 일환으로 MSA로 시스템을 구성하기 위한
   - 주문에서 event별 상태값을 포함한 트랜젝션 중심로직을 설정하고 product에서 전체 재고 수량을 관리
 
 ![v2](https://user-images.githubusercontent.com/57124820/108931766-90fd8e80-768b-11eb-8d0a-e77ba14ff280.png)
-* MSAEZ 모델링 이벤트스토밍 최종 결과:
+* Revision 2:
   - 예약(reservation)/배송(delivery)/상품(product)/개인화면(myPage)로 Bounded Context 설정
   - 주문의 자연어 뜻이 혼동되어 예약으로 변경하고, 기존 주문에 집중된 로직을 분리함
   - 전체 상품의 배송상태를 취합하여 조회가능한 myPage 신설
   - 상품은 기본적인 수량변동만 취합
 http://www.msaez.io/#/storming/mE0rA9pV1tPfOibSknVbRBhRqkY2/every/ccf36caac98aab7713fb43c28040d31f
-
 <img width="658" alt="스크린샷 2021-02-24 오전 2 10 08" src="https://user-images.githubusercontent.com/34236968/108880349-8ddfaf80-7645-11eb-9b80-b7737dd1896c.png">
+* MSAEZ 모델링 이벤트스토밍 최종 결과:
+  - 예약(reservation)/배송(delivery)/상품(product)/개인화면(myPage)에 사서(backoffice) Bounded Context 설정
+  - 사서는 신규책 입고와 기존책 삭제(만료)를 처리할 수 있음
+  - 신규책 입고시 myPage에서 신규로 입고된 책을 실시간으로 조회가능
+  - 기존책 삭제시 상품내 재고가 0처리 되는지 Req/Res 방식으로 조회
+![v3](https://user-images.githubusercontent.com/57124820/109103030-671c9880-776d-11eb-83fb-433ced0d4bb8.png)
 
 ## Hexagonal Architecture Diagram
 
@@ -136,6 +141,9 @@ cd mypage
 mvn spring-boot:run  
 
 cd gateway
+mvn spring-boot:run 
+
+cd backoffice
 mvn spring-boot:run  
 ```
 
@@ -143,45 +151,32 @@ mvn spring-boot:run
 
 - 각 업무단위 Bounded Context를 설정하고 Aggregate 객체를 Entity 로 선언하였다. 가능한 현업에서 이해할 수 있는 수준의 (유비쿼터스 랭귀지)를 사용하였으나 Entity 내부의 변수명은 MSA 구조에 맞추어 선언하였다.
 
-Reservation 서비스
+Backoffice 서비스
 
 ```
 package book;
 
+import book.external.ProductService;
+import book.external.Product;
 import javax.persistence.*;
 import org.springframework.beans.BeanUtils;
 import java.util.List;
-import java.util.concurrent.TimeUnit;
-
-import book.external.Delivery;
-import book.external.DeliveryService;
 
 @Entity
-@Table(name="Reservation_table")
-public class Reservation {
+@Table(name="Backoffice_table")
+public class Backoffice {
 
     @Id
     @GeneratedValue(strategy=GenerationType.AUTO)
     private Long id;
-    private Long productId;
-    private Integer statusCode;
+    private Integer stock;
 
     @PrePersist
     public void onPrePersist(){
-        Reserved reserved = new Reserved();
-        BeanUtils.copyProperties(this, reserved);
-        reserved.publishAfterCommit();
-    }
-
-    @PreUpdate
-    public void onPreUpdate() throws Exception{
-        Canceled canceled = new Canceled();
-        BeanUtils.copyProperties(this, canceled);
-        canceled.publishAfterCommit();
-
-        Delivery delivery = new Delivery();
-
-        ReservationApplication.applicationContext.getBean(DeliveryService.class).cancel(delibery);
+        System.out.println("##############################################  Backoffice.java  : onPrePersist");
+        BookRegistered bookRegistered = new BookRegistered();
+        BeanUtils.copyProperties(this, bookRegistered);
+        bookRegistered.publishAfterCommit();
     }
 
 
@@ -192,22 +187,15 @@ public class Reservation {
     public void setId(Long id) {
         this.id = id;
     }
-    public Long getProductId() {
-        return productId;
+    public Integer getStock() {
+        return stock;
     }
 
-    public void setProductId(Long productId) {
-        this.productId = productId;
+    public void setStock(Integer stock) {
+        this.stock = stock;
     }
-    public Integer getStatusCode() {
-        return statusCode;
-    }
-
-    public void setStatusCode(Integer statusCode) {
-        this.statusCode = statusCode;
-    }
-
 }
+
 
 ```
 
@@ -218,7 +206,8 @@ package book;
 
 import org.springframework.data.repository.PagingAndSortingRepository;
 
-public interface ReservationRepository extends PagingAndSortingRepository<Reservation, Long>{
+public interface BackofficeRepository extends PagingAndSortingRepository<Backoffice, Long>{
+
 }
 ```
 
@@ -234,21 +223,24 @@ http localhost:8083/products id=1 stock=10
 # 도서 예약 상태 확인
 http localhost:8084/myPages
 
+# 신규도서 등록
+http localhost:8085/backoffices id=1 stock=10
+# 기존도서 삭제
+http localhost:8085/unregisters id=1 stock=0
 ```
 
 ## 폴리글랏 퍼시스턴스
 
-myPage 서비스는 SQLLite DB를 적용하였다. Entity Pattern 과 Repository Pattern 적용과 데이터베이스의 설정 (application.yml) 만으로 sqlLite 에 부착시켰다
+상품, 예약, 배송은 H2 DB, myPage 서비스는 SQLLite, 사서 서비스는 hsql DB를 적용하였다. Entity Pattern 과 Repository Pattern 적용과 데이터베이스의 설정 (application.yml) 만으로 sqlLite 에 부착시켰다
 
 ```
 # pom.xml
-
 <dependency>
-    <groupId>org.xerial</groupId>
-    <artifactId>sqlite-jdbc</artifactId>
-    <version>3.25.2</version>
+	<groupId>org.hsqldb</groupId>
+	<artifactId>hsqldb</artifactId>
+	<version>2.4.0</version>
+	<scope>runtime</scope>
 </dependency>
-
 # application.yml
 
 spring:
@@ -265,71 +257,64 @@ spring:
 
 분석 단계에서의 조건 중 하나로 예약(reservation)->배송(delivery) 간의 호출은 동기식 일관성을 유지하는 트랜잭션으로 처리하기로 하였습니다. 호출 프로토콜은 이미 앞서 Rest Repository 에 의해 노출되어있는 REST 서비스를 FeignClient 를 이용하여 호출하도록 한다. 
 
-- 배송 취소를 호출하기 위하여 Stub과 (FeignClient)를 이용하여 Service 대행 인터페이스(Proxy) 를 구현 
+신규추가된 사서 서비스에서 기존 도서를 삭제(만료)처리할 경우 삭제할 도서가 있어야 실행이 되기에 역시 트랜젝션으로 구현하였으며 FeignClient를 이용하여 호출하고 있습니다
+
+- 배송 취소, 도서삭제를 호출하기 위하여 Stub과 (FeignClient)를 이용하여 Service 대행 인터페이스(Proxy) 를 구현 
 
 ```
-# DeliveryService.java
+# ProductService.java
 
-@FeignClient(name="delivery", url="http://localhost:8082")
-public interface DeliveryService {
+@FeignClient(name="product", url="http://localhost:8083")
+public interface ProductService {
 
-    @RequestMapping(method= RequestMethod.POST, path ="/deliveries")
-    public void cancel(@RequestBody Delivery delivery);
+    @RequestMapping(method= RequestMethod.POST, path="/products")
+    public void unregisterProduct(@RequestBody Product product);
+
 }
 ```
 
-- 취소 후(@PostPersist) 배송을 취소하도록 처리
+-  재고취소 후(@PostPersist) 삭제하도록 취소하도록 처리
 ```
-# Reservation.java
+# Unregister.java
 
-  @PreUpdate
-    public void onPreUpdate() throws Exception{
-        Canceled canceled = new Canceled();
-        BeanUtils.copyProperties(this, canceled);
-        canceled.publishAfterCommit();
+   @PostPersist
+    public void onPostPersist(){
+        System.out.println("##############################################  Backoffice.java  : onPostPersist");
+        BookUnregistered bookUnregistered = new BookUnregistered();
+        BeanUtils.copyProperties(this, bookUnregistered);
+        bookUnregistered.publishAfterCommit();
 
         //Following code causes dependency to external APIs
         // it is NOT A GOOD PRACTICE. instead, Event-Policy mapping is recommended.
 
-        //Delivery delivery = new Delivery();
+        book.external.Product product = new book.external.Product();
+        product.setId(getId());  //신규 책 고유번호
+        product.setStock(getStock());  //신규 책 입고숫자, 0일경우 삭제
         // mappings goes here
-        book.external.Delivery delivery = new book.external.Delivery();
-
-        delivery.setId(getId()); //reservation Id
-        delivery.setOrderId(getId()); //reservation Id
-        delivery.setProductId(getProductId());
-        delivery.setStatusCode(3);
-        Thread.sleep(2000);//2초 슬립
-       ReservationApplication.applicationContext.getBean(DeliveryService.class).cancel(delivery);
-
-       System.out.println("##### TEST 2 : " + delivery.getStatusCode());
-
-       if(delivery.getStatusCode() == 3){
-            
-       }
-
+        BackofficeApplication.applicationContext.getBean(book.external.ProductService.class).unregisterProduct(product);
 
     }
-```
-
-onPreUpdate 실행시 로그
-
-##### TEST 2 : 3
 
 ```
-Hibernate: 
-    update
-        reservation_table 
-    set
-        product_id=?,
-        status_code=? 
-    where
-        id=?
+```
+Product.java
+if(getStock()==0){
+            ProductUnregistered productUnregistered = new ProductUnregistered();
+            BeanUtils.copyProperties(this, productUnregistered);
+            productUnregistered.publishAfterCommit();
+            try{
+                 System.out.println("###################ThreadSLeep Start####################");
+                Thread.sleep(6000);  //6초간 sleep
+                
+            }catch(InterruptedException e){}   
+         }
 
+```
+```
 Kafka 로그
-{"eventType":"Canceled","timestamp":"20210223233224","id":1,"productId":null,"statusCode":null,"me":true}
-{"eventType":"Canceled","timestamp":"20210223233305","id":1,"productId":1,"statusCode":2,"me":true}
-{"eventType":"Canceled","timestamp":"20210223233316","id":1,"productId":null,"statusCode":null,"me":true}
+{"eventType":"ProductUnregistered","timestamp":"20210225044929","id":2,"statusCode":null,"stock":0,"me":true}
+{"eventType":"BookUnregistered","timestamp":"20210225044929","bookId":null,"bookStock":null,"me":true}
+
 ```
 
 delivery 상태값 변경
@@ -359,24 +344,20 @@ Transfer-Encoding: chunked
 HTTP/1.1 500 
 Connection: close
 Content-Type: application/json;charset=UTF-8
-Date: Wed, 24 Feb 2021 01:39:44 GMT
+Date: Thu, 25 Feb 2021 05:35:18 GMT
 Transfer-Encoding: chunked
 
 {
     "error": "Internal Server Error", 
     "message": "Could not commit JPA transaction; nested exception is javax.persistence.RollbackException: Error while committing the transaction", 
-    "path": "/reservations", 
+    "path": "/unregisters", 
     "status": 500, 
-    "timestamp": "2021-02-24T01:39:44.061+0000"
+    "timestamp": "2021-02-25T05:35:18.086+0000"
 }
 
 
-{"eventType":"Canceled","timestamp":"20210224013921","id":1,"productId":1,"statusCode":2,"me":true}
-{"eventType":"Canceled","timestamp":"20210224013944","id":1,"productId":1,"statusCode":2,"me":true}
-
-# delivery 재기동시 반영
-
-{"eventType":"Delivered","timestamp":"20210224014034","id":1,"statusCode":2,"orderId":null,"productId":null,"me":true}
+{"eventType":"BookUnregistered","timestamp":"20210225053309","bookId":null,"bookStock":null,"me":true}
+{"eventType":"BookUnregistered","timestamp":"20210225053518","bookId":null,"bookStock":null,"me":true}
 
 # 배송상태값 변경
 transfer-Encoding: chunked
@@ -395,7 +376,7 @@ transfer-Encoding: chunked
     "statusCode": 2
 }
 ```
-- 동기식 호출에서는 호출 시간에 따른 타임 커플링이 발생하며, 배송 시스템이 장애가 나면 배송취소가 불가능한 것을 확인:
+- 동기식 호출에서는 호출 시간에 따른 타임 커플링이 발생
 
 ```
 # 배송(delivery) 서비스
@@ -508,8 +489,27 @@ hystrix:
 
 
 ```
-
-
+```
+defaulting to time-based testing: 60 seconds
+** SIEGE 4.0.2
+** Preparing 1 concurrent users for battle.
+The server is now under siege...
+Lifting the server siege...
+Transactions:                    233 hits
+Availability:                 100.00 %
+Elapsed time:                  59.64 secs
+Data transferred:               0.04 MB
+Response time:                  0.00 secs
+Transaction rate:               3.91 trans/sec
+Throughput:                     0.00 MB/sec
+Concurrency:                    0.01
+Successful transactions:         233
+Failed transactions:               0
+Longest transaction:            0.11
+Shortest transaction:           0.00
+ 
+*** Error in `siege': free(): invalid pointer: 0x00007f556980e800 ***
+```
 # 운영
 
 ## CI/CD 설정
